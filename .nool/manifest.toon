@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Claim task 5b8b36e6
-knot_id: 45ee70b3979ab1ecad70db44623bc7e7434fbe8e112b9ffdd4ad86a3e32718ce
-solidified_at: 1790903415881
+intent: Start task 5b8b36e6
+knot_id: 07ac89dc99de8f61c1a5827f3fa1a7f4de0440a46b793ba9d60af32a80a119b0
+solidified_at: 1790903416114
 thread: plant-verification
