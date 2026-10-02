@@ -45,5 +45,7 @@ void apply_genome(Experiment* e1,Genome* g,Species* sp);
 void create_random_species(World*world,Genome*template,uint count);
 void auto_seed_CA(CA*ca,uint dist,uint min, uint max);
 int  total_biomass(CA*ca);
-void combine_genomes(Genome*g1_in,Genome*g2_in,Genome*g1_out,Genome*g2_out);
+short unsigned int crossover(short unsigned int m,short unsigned int f,short unsigned int* c1,short unsigned int* c2);
+/* Recombine thresholds and biases; other traits copy their respective parent. */
+void combine_genomes(const Genome*g1_in,const Genome*g2_in,Genome*g1_out,Genome*g2_out);
 #endif

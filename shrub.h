@@ -76,9 +76,11 @@ typedef struct Pile{
 //updated fcns
 World*             create_world                 (Experiment* experiment);
 Cell*              neighbor			(CA*ca,Neighbor n,uint y, uint x);
+Cell*              o_neighbor                   (CA*ca,Neighbor n,uint y,uint x);
 uint               neighbor_count		(CA*ca,uint y, uint x);
 uint               in_bounds			(CA*ca,int y, int x);
 uint               longest_dist_to_edge		(CA*ca,uint y,uint x);
+uint               longest_dist_to_sprout       (CA*ca,uint y,uint x);
 uint               init_hummus			(CA*ca,uint y,uint x);
 uint               alloc_CA			(World*ca,uint ys,uint xs);
 void               dealloc_CA			(CA*ca);

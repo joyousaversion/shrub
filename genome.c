@@ -8,20 +8,21 @@
 #include "perlin.h"
 short unsigned int crossover(short unsigned int m,short unsigned int f,short unsigned int* c1,short unsigned int*c2){
   uint entropy = rand();
-  uint msk= ((1 << (entropy & 0x0F)) - 1);
+  /* The cut stays in 0..15; each child's bits mutate independently at 1/1024. */
+  uint msk= ((1u << (entropy & 0x0F)) - 1);
   uint mt1 = msk&m;
   uint mf1 = (~msk)&f;
   uint mt2 = msk&f;
   uint mf2 = (~msk)&m;
   uint out1 = mt1 | mf1;
   for(int i=0;i<16;i++){
-    if(!rand()%1024)
-      out1 =  out1 ^ (1<<i);
+    if(rand()%1024 == 0)
+      out1 =  out1 ^ (1u<<i);
   }
   uint out2 = mt2 | mf2;
   for(int i=0;i<16;i++){
-    if(!rand()%1024)
-      out1 =  out1 ^ (1<<i);
+    if(rand()%1024 == 0)
+      out2 =  out2 ^ (1u<<i);
   }
   *c1 = out1;
   *c2 = out2;
@@ -30,10 +31,14 @@ short unsigned int crossover(short unsigned int m,short unsigned int f,short uns
 
 
 void create_random_species(World*world,Genome*template,uint count){
+  if(world == NULL || template == NULL)
+    return;
+  /* Registration may grow world->genomes, including a template stored there. */
+  const Genome source = *template;
   Genome g;
   Genome*gp = &g;
-  for(int i=0;i<count;i++){
-    memcpy(gp,template,sizeof(Genome));
+  for(uint i=0;i<count;i++){
+    memcpy(gp,&source,sizeof(Genome));
     ALL(gp,reproduction_bias,rand());
     ALE(gp,transfer_bias,rand());
     ONE(gp,evolve_threshold[LONGEST_DISTANCE_TO_TIP][LEAF]  ,rand()%16);
@@ -47,7 +52,9 @@ void create_random_species(World*world,Genome*template,uint count){
     ONE(gp,evolve_threshold[1][FLOWER_FEMALE],100);
     gp->parents[0] = 0;
     gp->parents[1] = 0;
-    create_species(world,gp);
+    gp->genome_id = 0;
+    if(create_species(world,gp) < 0)
+      return;
   }
   return;
 }
@@ -64,29 +71,33 @@ void auto_seed_CA(CA*ca,uint dist,uint min, uint max){
 
 
   
-void combine_genomes(Genome*g1_in,Genome*g2_in,Genome*g1_out,Genome*g2_out){
+void combine_genomes(const Genome*g1_in,const Genome*g2_in,Genome*g1_out,Genome*g2_out){
   memcpy(g1_out,g1_in,sizeof(Genome));
   memcpy(g2_out,g2_in,sizeof(Genome));
 
-  for(int form=0;form<3;form++){
+  for(int form=0;form<THC;form++){
     for(int tissue=0;tissue<TC;tissue++){
       unsigned short n1,n2;
       crossover(g1_in->evolve_threshold[form][tissue],g2_in->evolve_threshold[form][tissue],&n1,&n2);
-      n1 &= 0x08;
-      n2 &= 0x08;
-      g1_out->evolve_threshold[form][tissue] = n1;
-      g2_out->evolve_threshold[form][tissue] = n2;
+      g1_out->evolve_threshold[form][tissue] = (byte)n1;
+      g2_out->evolve_threshold[form][tissue] = (byte)n2;
     }
   }
     ONE(g1_out,evolve_threshold[0][FLOWER_MALE],100);
     ONE(g1_out,evolve_threshold[1][FLOWER_FEMALE],100);
+    ONE(g2_out,evolve_threshold[0][FLOWER_MALE],100);
+    ONE(g2_out,evolve_threshold[1][FLOWER_FEMALE],100);
     
   for(int t=0;t<TC;t++){
-    for(int n=0;n<WATER;n++){
-      crossover(g1_in->transfer_bias[n][t],g2_in->transfer_bias[n][t],&g2_out->transfer_bias[n][t],&g2_out->transfer_bias[n][t]);
+    for(int n=0;n<NC;n++){
+      crossover(g1_in->transfer_bias[n][t],g2_in->transfer_bias[n][t],&g1_out->transfer_bias[n][t],&g2_out->transfer_bias[n][t]);
     }
-    crossover(g1_in->reproduction_bias[t],g2_in->reproduction_bias[t],&g2_out->reproduction_bias[t],&g2_out->reproduction_bias[t]);
+    crossover(g1_in->reproduction_bias[t],g2_in->reproduction_bias[t],&g1_out->reproduction_bias[t],&g2_out->reproduction_bias[t]);
   }
+  /* Registration assigns identity; provenance refers to the stored parents. */
+  g1_out->parents[0] = g2_out->parents[1] = g1_in->genome_id;
+  g1_out->parents[1] = g2_out->parents[0] = g2_in->genome_id;
+  g1_out->genome_id = g2_out->genome_id = 0;
   return;
 }
 void apply_genome(Experiment* e1,Genome* g,Species* p){
@@ -122,6 +133,10 @@ void apply_genome(Experiment* e1,Genome* g,Species* p){
 }
 
 int init_sample_run(Experiment* e1,Genome* gs){
+  if(e1 == NULL || gs == NULL)
+    return -1;
+  memset(e1,0,sizeof(*e1));
+  memset(gs,0,sizeof(*gs));
   ALE(e1,repro_cost,1);
   ALL(e1,repro_cost[WATER],0);
   ALL(e1,fg_color,0);
@@ -250,22 +265,33 @@ int total_biomass(CA*ca){
       
 
 int auto_breed_plants(World*world,uint zone,uint diversity){
-  uint* popcount = sum_by_species(world,zone); 
-  uint* fitness = popcount;
+  if(world == NULL || world->zones == NULL || world->genomes == NULL ||
+     world->plantae == NULL || world->experiment == NULL ||
+     zone >= world->zone_count || world->zone_count > world->allocd_zones ||
+     world->max_species_id > world->allocd_genomes || diversity == 0 ||
+     diversity%2 != 0 || diversity >= world->max_species_id)
+    return -1;
+  uint* popcount = sum_by_species(world,zone);
+  if(popcount == NULL)
+    return -1;
+  const uint cohort_start = world->max_species_id-diversity;
   uint* winner_ids = calloc(diversity,sizeof(uint));
-  roulette(fitness+(world->max_species_id-diversity),winner_ids,diversity,diversity);
+  if(winner_ids == NULL || roulette(popcount+cohort_start,winner_ids,diversity,diversity) != 0){
+    free(popcount);
+    free(winner_ids);
+    return -1;
+  }
   Genome g1;
   Genome g2;
-  for(int i=0;i<diversity;i+=2){
-    Genome* m = &world->genomes[winner_ids[i]];
-    Genome* p = &world->genomes[winner_ids[i+1]];
+  for(uint i=0;i<diversity;i+=2){
+    Genome* m = &world->genomes[cohort_start+winner_ids[i]];
+    Genome* p = &world->genomes[cohort_start+winner_ids[i+1]];
     combine_genomes(m,p,&g1,&g2);
-    g1.parents[0] = winner_ids[i];
-    g1.parents[1] = winner_ids[i+1];
-    g2.parents[0] = winner_ids[i+1];
-    g2.parents[1] = winner_ids[i];    
-    create_species(world,&g1);
-    create_species(world,&g2);
+    if(create_species(world,&g1) < 0 || create_species(world,&g2) < 0){
+      free(popcount);
+      free(winner_ids);
+      return -1;
+    }
   }
   free(popcount);
   free(winner_ids);

@@ -12,37 +12,52 @@ plant your seeds.
 #include <sys/time.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
+#include <stdint.h>
 #define REPRO_BIAS(_bias,_n) (_bias >> ((_n-1)*2) &0x03)
 int XMAP[10] = {0, 0, 1,1,1,0,-1,-1,-1,0};
 int YMAP[10] = {0,-1,-1,0,1,1, 1, 0,-1,0};
 Neighbor RMAP[10] = {SELF,BOTTOM,BOTTOM_LEFT,LEFT,TOP_LEFT,TOP,TOP_RIGHT,RIGHT,BOTTOM_RIGHT,NEW};
 uint get_shares_by_direction(short unsigned int bias,Neighbor neighbor){
-  if(neighbor > 9)
+  if(neighbor == SELF)
+    return 1;
+  if(neighbor < TOP || neighbor > TOP_LEFT)
     return 0;
   bias >>= (neighbor-1)*2;
   bias &= 0x03;
-  if(neighbor == SELF)
-    return 1;
   return bias;
 }
 
 uint set_shares_by_direction(short unsigned int q,Neighbor n){
-  if(q > 3)
+  if(q > 3 || n < TOP || n > TOP_LEFT)
     return 0;
   return q << (n-1)*2;
 }
 
 
 uint* sum_by_species(World*world,uint zone){
-  if(zone >= world->zone_count){
+  if(world == NULL || world->zones == NULL || zone >= world->zone_count ||
+     world->max_species_id == 0){
     return NULL;
   }
   CA* ca = &world->zones[zone];
+  if(ca->new == NULL || ca->ys == 0 || ca->xs == 0)
+    return NULL;
   uint* popcount = calloc(world->max_species_id,sizeof(uint));
+  if(popcount == NULL)
+    return NULL;
   for(int i=0;i<ca->ys;i++){
+    if(ca->new[i] == NULL){
+      free(popcount);
+      return NULL;
+    }
     for(int j=0;j<ca->xs;j++){
       Cell* V = &ca->new[i][j];
       if(V->parent != SELF){
+        if(V->species_id <= 0 || (uint)V->species_id >= world->max_species_id){
+          free(popcount);
+          return NULL;
+        }
 	popcount[V->species_id]++;
       }
     }
@@ -72,17 +87,13 @@ int get_shape(CA*ca,uint i,uint j){
   return shape;
 }  
 Tissue* get_tissue(CA* ca,SpeciesId s,TissueId t){
-  if(s == 0)
+  if(ca == NULL || ca->world == NULL || ca->world->plantae == NULL ||
+     s == 0 || s >= ca->world->max_species_id || t < LEAF || t > ROOT)
     return NULL;
   Species* species = &ca->world->plantae[s];
-  if(species == NULL)
+  if(species->tissues == NULL)
     return NULL;
-  if(t > 7 || t == 0)
-    return NULL;
-  Tissue* tissue = &species->tissues[t];
-  if(tissue != NULL)
-    return tissue;
-  return NULL;
+  return &species->tissues[t];
 }
  
 uint in_bounds(CA*ca,int y,int x){
@@ -104,11 +115,14 @@ uint is_porous(Substrate t){
 }
 
 Cell* o_neighbor(CA* ca,Neighbor n,uint y, uint x){
+  if(ca == NULL || ca->old == NULL || n < SELF || n > TOP_LEFT ||
+     y >= ca->ys || x >= ca->xs)
+    return NULL;
   Board* b = ca->old;
   
   uint ny = y+YMAP[n];
   uint nx = x+XMAP[n];
-  if(ny >= ca->ys || nx >=ca->xs){
+  if(ny >= ca->ys || nx >=ca->xs || b[ny] == NULL){
     return NULL;
   }
   return &b[ny][nx];
@@ -116,11 +130,14 @@ Cell* o_neighbor(CA* ca,Neighbor n,uint y, uint x){
 
     
 Cell* neighbor(CA* ca,Neighbor n,uint y, uint x){
+  if(ca == NULL || ca->new == NULL || n < SELF || n > TOP_LEFT ||
+     y >= ca->ys || x >= ca->xs)
+    return NULL;
   Board* b = ca->new;
   
   uint ny = y+YMAP[n];
   uint nx = x+XMAP[n];
-  if(ny >= ca->ys || nx >=ca->xs){
+  if(ny >= ca->ys || nx >=ca->xs || b[ny] == NULL){
     return NULL;
   }
   return &b[ny][nx];
@@ -211,43 +228,124 @@ void find_prev_member(CA*ca,int y, int x,int* y_out,int*x_out){
 }
 
 
-uint longest_dist_to_edge(CA*ca,uint y,uint x){
-  uint path1 = 0;
-  uint path2 = 0;
-  Board* new = ca->new;
-  if(y>=ca->ys || x>=ca->xs)
-    return 0;
-      
-  if((new[y][x].offspring[0] == SELF && new[y][x].offspring[1] == SELF) ||(new[y][x].offspring[0] == NEW && new[y][x].offspring[1] == NEW)){
-    return 1;
-  }
+typedef struct EdgeDistanceFrame{
+  uint y, x, longest;
+  byte next_slot;
+}EdgeDistanceFrame;
 
-  
-  if(new[y][x].offspring[0] != SELF && !new[y][x].circ){
-    path1++;
-    path1 += longest_dist_to_edge(ca,y+YMAP[new[y][x].offspring[0]],
-				  x+XMAP[new[y][x].offspring[0]]);
+/* A valid tree visits at most one module per board cell. This also bounds
+   malformed cycles without recursion or clearing a board-sized visited map. */
+static size_t distance_cell_limit(CA*ca){
+  if(ca == NULL || ca->xs == 0 || ca->ys > SIZE_MAX / ca->xs)
+    return 0;
+  return (size_t)ca->ys * ca->xs;
+}
+
+static uint longest_dist_to_edge_with_stack(CA*ca,uint y,uint x,
+                                            EdgeDistanceFrame** stack_store,
+                                            size_t* capacity_store,
+                                            EdgeDistanceFrame* local){
+  Cell* start = neighbor(ca,SELF,y,x);
+  if(start == NULL || get_tissue(ca,start->species_id,start->tissue_id) == NULL)
+    return 0;
+  size_t limit = distance_cell_limit(ca);
+  if(limit == 0)
+    return 0;
+  EdgeDistanceFrame* stack = *stack_store;
+  size_t capacity = *capacity_store;
+  size_t depth = 1, visited = 1;
+  uint result = 0;
+  stack[0] = (EdgeDistanceFrame){y,x,1,0};
+  while(depth != 0){
+    EdgeDistanceFrame* frame = &stack[depth-1];
+    Cell* cell = &ca->new[frame->y][frame->x];
+    if(frame->next_slot < 2){
+      byte slot = frame->next_slot++;
+      Neighbor direction = cell->offspring[slot];
+      if(direction > NEW)
+        goto done;
+      /* The first circular connection joins the two seed modules. */
+      if(cell->circ && slot == 0)
+        continue;
+      if(direction == SELF || direction == NEW)
+        continue;
+      Cell* child = neighbor(ca,direction,frame->y,frame->x);
+      if(child == NULL || child->species_id != start->species_id ||
+         child->plant_id != start->plant_id ||
+         get_tissue(ca,child->species_id,child->tissue_id) == NULL ||
+         visited >= limit)
+        goto done;
+      uint child_y = frame->y + YMAP[direction];
+      uint child_x = frame->x + XMAP[direction];
+      if(depth == capacity){
+        size_t next_capacity = capacity > limit / 2 ? limit : capacity * 2;
+        if(next_capacity > SIZE_MAX / sizeof(*stack))
+          goto done;
+        EdgeDistanceFrame* expanded = malloc(next_capacity * sizeof(*stack));
+        if(expanded == NULL)
+          goto done;
+        memcpy(expanded,stack,depth * sizeof(*stack));
+        if(stack != local)
+          free(stack);
+        stack = expanded;
+        capacity = next_capacity;
+      }
+      stack[depth++] = (EdgeDistanceFrame){child_y,child_x,1,0};
+      visited++;
+    }else{
+      uint longest = frame->longest;
+      depth--;
+      if(depth == 0){
+        result = longest;
+        break;
+      }
+      if(longest == UINT_MAX)
+        goto done;
+      if(stack[depth-1].longest < longest + 1)
+        stack[depth-1].longest = longest + 1;
+    }
   }
-  if(new[y][x].offspring[1] != SELF){
-    path2++;
-    path2 += longest_dist_to_edge(ca,y+YMAP[new[y][x].offspring[1]],
-				  x+XMAP[new[y][x].offspring[1]]);
-  }
-  return path1>path2?path1:path2;
+done:
+  *stack_store = stack;
+  *capacity_store = capacity;
+  return result;
+}
+
+uint longest_dist_to_edge(CA*ca,uint y,uint x){
+  /* Ordinary shallow plants need no allocation; deeper trees grow the
+     explicit stack instead of consuming the C call stack. */
+  EdgeDistanceFrame local[32];
+  EdgeDistanceFrame* stack = local;
+  size_t capacity = sizeof(local) / sizeof(local[0]);
+  uint result = longest_dist_to_edge_with_stack(ca,y,x,&stack,&capacity,local);
+  if(stack != local)
+    free(stack);
+  return result;
 }
 
 uint longest_dist_to_sprout(CA*ca,uint y,uint x){
-  if(y>=ca->ys || x>=ca->xs)
+  Cell* start = neighbor(ca,SELF,y,x);
+  if(start == NULL || get_tissue(ca,start->species_id,start->tissue_id) == NULL)
     return 0;
-  int count = 0;
-  for(Cell* V = &ca->new[y][x];V->circ == 0; V = &ca->new[y][x]){
-    if(V == NULL || V->parent == SELF)
+  size_t limit = distance_cell_limit(ca);
+  uint count = 0;
+  for(size_t visited = 0; visited < limit; visited++){
+    Cell* cell = neighbor(ca,SELF,y,x);
+    if(cell == NULL || cell->species_id != start->species_id ||
+       cell->plant_id != start->plant_id ||
+       get_tissue(ca,cell->species_id,cell->tissue_id) == NULL)
       return 0;
-    y = y + YMAP[V->parent];
-    x = x + XMAP[V->parent];
+    if(cell->circ)
+      return count;
+    Neighbor direction = cell->parent;
+    if(direction < TOP || direction > TOP_LEFT || count == UINT_MAX ||
+       neighbor(ca,direction,y,x) == NULL)
+      return 0;
+    y += YMAP[direction];
+    x += XMAP[direction];
     count++;
   }
-  return count;
+  return 0;
 }
 
 int find_ground(CA*ca,uint x){
@@ -368,29 +466,40 @@ void dealloc_CA(CA*ca){
 
 
 int in_genomes(World*w,Genome* g){
-  int genome_data_size = sizeof(*g) - sizeof(g->remarks) - sizeof(g->name) - sizeof(g->genome_id);
-  for(int i=0;i<w->max_species_id;i++){
-    if(!memcmp(&w->genomes[i],g,genome_data_size))
+  // Genotype identity excludes labels, assigned IDs, and pedigree metadata.
+  for(uint i=1;i<w->max_species_id;i++){
+    Genome* stored = &w->genomes[i];
+#define SAME(field) (memcmp(stored->field,g->field,sizeof(g->field)) == 0)
+    if(SAME(transfer_bias) && SAME(reproduction_bias) && SAME(min) && SAME(max) &&
+       SAME(evolve_type) && SAME(evolve_threshold) && SAME(max_offspring) &&
+       SAME(flux_cost) && SAME(initial_flux) && SAME(min_seed_nutrients))
       return i;
+#undef SAME
   }
   return 0;
 }
   
 //don't forget to initialize hummus in init function
 int create_species(World*world,Genome*g1){
+  if(world == NULL || g1 == NULL)
+    return -1;
   int genome_id = in_genomes(world,g1);
   if(genome_id >=1){
     return genome_id;
   }
+  // The input can live inside the array whose allocation is about to move.
+  Genome source = *g1;
   if(world->max_species_id >= world->allocd_genomes){
     world->allocd_genomes *= 2;
     world->genomes = realloc(world->genomes,sizeof(Genome)*world->allocd_genomes);
     world->plantae = realloc(world->plantae,sizeof(Species)*world->allocd_genomes);
   }
   Species* s = &world->plantae[world->max_species_id];
-  world->plantae[world->max_species_id].tissues =  calloc(10,sizeof(Tissue));
-  apply_genome(world->experiment,g1,&world->plantae[world->max_species_id]);
-  memcpy(&world->genomes[world->max_species_id],g1,sizeof(Genome));
+  memset(s,0,sizeof(*s));
+  s->tissues = calloc(TC,sizeof(Tissue));
+  apply_genome(world->experiment,&source,s);
+  source.genome_id = world->max_species_id;
+  memcpy(&world->genomes[world->max_species_id],&source,sizeof(Genome));
   
   s->count = 0;
   s->allocd = 10;
@@ -402,14 +511,22 @@ int create_species(World*world,Genome*g1){
 
 //AFTER tick_wind
 void tick_flowers(CA*ca,uint y, uint x){
-  Cell * V = &ca->new[y][x];
-  if(V->parent == SELF)
+  Cell * V = neighbor(ca,SELF,y,x);
+  if(V == NULL || V->parent == SELF || V->reap ||
+     get_tissue(ca,V->species_id,V->tissue_id) == NULL)
+    return;
+  Cell* parent = o_neighbor(ca,V->parent,y,x);
+  if(parent == NULL || parent->species_id <= 0 ||
+     get_tissue(ca,parent->species_id,parent->tissue_id) == NULL)
     return;
   if(V->tissue_id == FLOWER_FEMALE && V->items != NULL && V->items->type == POLLEN &&
-     V->species_id == o_neighbor(ca,V->parent,y,x)->species_id){
+     V->species_id == parent->species_id){
+    int pollen_sid = V->items->item.species_id;
+    if(pollen_sid <= 0 || (uint)pollen_sid >= ca->world->max_species_id)
+      return;
     Genome g1,g2;
     Genome* G = NULL;
-    combine_genomes(&ca->world->genomes[V->species_id],&ca->world->genomes[V->items->item.species_id],&g1,&g2);
+    combine_genomes(&ca->world->genomes[V->species_id],&ca->world->genomes[pollen_sid],&g1,&g2);
     if(rand()%2){
       G = &g1;
     }
@@ -417,15 +534,17 @@ void tick_flowers(CA*ca,uint y, uint x){
       G = &g2;
     }
     int sid = create_species(ca->world,G);
+    if(sid <= 0 || sid > SHRT_MAX)
+      return;
     V->species_id = sid;
     delete_item(ca,y,x,0);
-  }
-  if(V->tissue_id == FLOWER_FEMALE && V->species_id != o_neighbor(ca,V->parent,y,x)->species_id){
+    /* Fertilization succeeds even when registration reuses an existing genotype. */
     V->reap = 1;
   }
 
   if(V->tissue_id == FLOWER_MALE && V->items == NULL &&
-    V->nutrients[HUMMUS] >=1 && V->nutrients[PHOTO] >= 1){
+    V->nutrients[HUMMUS] >=1 && V->nutrients[PHOTO] >= 1 &&
+    V->nutrients[WATER] >= 1 && rand()%2){
     Item pollen = {0};
     pollen.type = POLLEN;
     pollen.item.species_id = V->species_id;
@@ -434,38 +553,43 @@ void tick_flowers(CA*ca,uint y, uint x){
     pollen.nutrients[HUMMUS] = 1;
     pollen.mass = .0018;
     pollen.shape = '.';
-    if(create_item(ca,y,x,&pollen) != -1 && rand()%2){
-      V->nutrients[HUMMUS]--;
-      V->nutrients[PHOTO]--;
-    }
+    if(create_item(ca,y,x,&pollen) != -1)
+      for(uint n=0;n<NC;n++)
+        V->nutrients[n] -= pollen.nutrients[n];
   }
   return;
 }
 int has_living_neighbors(CA*ca,uint y,uint x){
-  for (int i=0;i<10;i++){
-    int yc = y+1+YMAP[i];
-    int xc = x+XMAP[i];
+  if(ca == NULL || y >= ca->ys || x >= ca->xs)
+    return 0;
+  /* Include the planting cell and its eight neighbors on both tick boards. */
+  for (int i=SELF;i<=TOP_LEFT;i++){
+    int yc = (int)y+YMAP[i];
+    int xc = (int)x+XMAP[i];
     if(in_bounds(ca,yc,xc) &&
-       ca->old[yc][xc].parent != SELF)
+       (ca->old[yc][xc].parent != SELF || ca->new[yc][xc].parent != SELF))
       return 1;
   }
   return 0;
 }
 
 void tick_germinate(CA*ca,uint y,uint x){
+  if(ca == NULL || y >= ca->ys || x >= ca->xs)
+    return;
   Cell* O = &ca->new[y][x];
-  int pos = 0;
-  Item*items;
-  for(items = O->items;items != NULL;items = items->next){
+  for(Item** link = &O->items;*link != NULL;link = &(*link)->next){
+    Item* items = *link;
     if(items->type == SEED){
-      if(!in_bounds(ca,y+1,x) || ca->old[y+1][x].substrate_type != GROUND
+
+      if(y+1 >= ca->ys || ca->old[y+1][x].substrate_type != GROUND
 	 || has_living_neighbors(ca,y+1,x))
 	return;
-      plant_seed(ca,items->item.species_id,y+1,x);
-      delete_item(ca,y,x,pos);
+      if(plant_seed(ca,items->item.species_id,y+1,x) == 0){
+        *link = items->next;
+        free(items);
+      }
       return;
     }
-    pos++;
   }
 
 }
@@ -476,27 +600,42 @@ void tick_flower(CA*ca,uint y, uint x){
 int plant_seed(CA*ca,uint sid,uint y,uint x)
 {
   //we may make this more complex in the future. ex can't plant a cactus in regular soil, certain nutrient requirements.
-  if(!in_bounds(ca,y,x) || ca->old[y][x].substrate_type != GROUND || ca->old[y][x].substrate_type != GROUND || sid == 0)
+  if(ca == NULL || ca->world == NULL || y == 0 || y >= ca->ys || x >= ca->xs ||
+     sid == 0 || sid >= ca->world->max_species_id || sid > SHRT_MAX ||
+     ca->world->max_plant_id > USHRT_MAX || ca->old[y][x].substrate_type != GROUND)
     return -1;
-  if(sid > ca->world->max_species_id){
-    printf("invalid plant");
-    exit(23);
-  }
-  if(sid == 0){
-    printf("invalid plant 0");
-    exit(23);
-    
-  }
-  
-  if(sid >= ca->world->max_species_id || sid == 0){
-    printf("BAD TOUCH %d,max is %d",sid,ca->world->max_species_id);
-      exit(23);
-  }
-
   Tissue* t1 = get_tissue(ca,sid,ROOT);
-  Tissue* t2 = get_tissue(ca,sid,SHOOT); 
+  Tissue* t2 = get_tissue(ca,sid,SHOOT);
+  if(t1 == NULL || t2 == NULL)
+    return -1;
   Cell* seed1 =&ca->new[y][x];
   Cell* seed2 =&ca->new[y-1][x];
+  Cell* cells[] = {seed1, seed2, &ca->old[y][x], &ca->old[y-1][x]};
+  for(uint c=0;c<sizeof(cells)/sizeof(cells[0]);c++){
+    if(cells[c]->parent != SELF || cells[c]->offspring[0] != SELF ||
+       cells[c]->offspring[1] != SELF || cells[c]->floaty)
+      return -1;
+  }
+
+  Species* s = &ca->world->plantae[sid];
+  if(s->count >= s->allocd){
+    if(s->count > UINT_MAX/2)
+      return -1;
+    uint capacity = s->count ? s->count*2 : 10;
+    uint* plant_ids = realloc(s->plant_ids,capacity*sizeof(*plant_ids));
+    if(plant_ids == NULL)
+      return -1;
+    s->plant_ids = plant_ids;
+    s->allocd = capacity;
+  }
+  /* Reset module state without discarding the cell's resources or items. */
+  for(uint c=0;c<2;c++){
+    memset(cells[c]->nutrients,0,sizeof(cells[c]->nutrients));
+    memset(cells[c]->escrow,0,sizeof(cells[c]->escrow));
+    cells[c]->damage = cells[c]->reap = 0;
+    cells[c]->offspring[1] = SELF;
+  }
+  seed1->substrate_type = ca->old[y][x].substrate_type;
   seed1->parent = TOP;
   seed2->parent = BOTTOM;
   seed1->tissue_id = ROOT;
@@ -514,13 +653,8 @@ int plant_seed(CA*ca,uint sid,uint y,uint x)
   seed2->species_id = sid;
   seed1->plant_id = ca->world->max_plant_id;
   seed2->plant_id = ca->world->max_plant_id;
-  Species* s =   &ca->world->plantae[sid];
   s->plant_ids[s->count] = ca->world->max_plant_id;
   s->count++;
-  if(s->count >= s->allocd){
-    s->allocd *=2;
-    s->plant_ids = realloc(s->plant_ids,s->allocd*sizeof(uint));
-  }
   ca->world->max_plant_id++;
   
   return 0;
@@ -545,6 +679,8 @@ void just_wind(CA*ca,uint ticks){
   return;
 }
 void unmark_cell(CA*ca,uint i,uint j){
+  if(ca == NULL || i >= ca->ys || j >= ca->xs)
+    return;
   Cell* C = &ca->new[i][j];
   if(C->offspring[0] == NEW){
     C->offspring[0] = SELF;
@@ -914,6 +1050,7 @@ void transplant(CA*ca,uint i, uint j){
       n->nutrients[HUMMUS] = o->nutrients[HUMMUS];
       n->nutrients[PHOTO]  = o->nutrients[PHOTO];
       n->nutrients[WATER]  = o->nutrients[WATER];
+      memcpy(n->escrow,o->escrow,sizeof(n->escrow));
       n->tissue_id         = o->tissue_id;
       n->species_id        = o->species_id;
       n->flux              = o->flux;
@@ -956,12 +1093,16 @@ uint _cut(CA*ca,uint y, uint x){
 
 void kill_cell(CA*ca,uint y, uint x){
   //could have odd reactions with different tissue types in new resource propagation scheme, keep an eye on this.
-  Cell* c = &ca->new[y][x];
+  Cell* c = neighbor(ca,SELF,y,x);
+  if(c == NULL)
+    return;
   Item it = {0};
   it.type = FRAGMENT;
   it.size = 25;
   //memcpy(it.nutrients,c->nutrients,3);
   Tissue* t = get_tissue(ca,c->species_id,c->tissue_id);
+  if(t == NULL)
+    return;
   it.fg_color = 226;//t->fg_color;
   it.bg_color = t->bg_color;
   it.shape = get_shape(ca,y,x);
@@ -971,8 +1112,7 @@ void kill_cell(CA*ca,uint y, uint x){
   it.nutrients[HUMMUS] = c->nutrients[HUMMUS];
   it.nutrients[WATER] = c->nutrients[WATER];
   it.decay_rate = t->decay_rate;
-  Cell* O_N  = o_neighbor(ca,c->parent,y,x);
-  if(c->tissue_id == FLOWER_FEMALE && c->tissue_id != O_N->tissue_id && O_N->tissue_id != 0){
+  if(c->tissue_id == FLOWER_FEMALE && c->reap){
     it.item.species_id = c->species_id;
     it.type = SEED;
     it.decay_rate = 0;
@@ -1047,20 +1187,31 @@ uint cut(CA*ca,uint y,uint x){
 
 //these rules are likely to become more general and more complicated, as the Species struct,err, 'evolves'.
 void transform(CA*ca){
+  if(ca == NULL || ca->new == NULL)
+    return;
   Board*new = ca->new;
+  /* Reuse traversal storage for the whole pass, including deeper plants. */
+  EdgeDistanceFrame local[32];
+  EdgeDistanceFrame* stack = local;
+  size_t capacity = sizeof(local) / sizeof(local[0]);
   for(int i=0;i<ca->ys;i++){for(int j=0;j<ca->xs;j++){
       Cell*V = &new[i][j];
       Tissue* t = get_tissue(ca,V->species_id,V->tissue_id);
       if(t == NULL)
 	continue;
-      uint dist = longest_dist_to_edge(ca,i,j);
-      if(dist >= t->evolve_threshold[0] && t->evolve_type[0] != NONE)
+      uint dist = longest_dist_to_edge_with_stack(ca,i,j,&stack,&capacity,local);
+      if(dist >= t->evolve_threshold[LONGEST_DISTANCE_TO_TIP] &&
+         get_tissue(ca,V->species_id,t->evolve_type[LONGEST_DISTANCE_TO_TIP]) != NULL)
 	V->tissue_id = t->evolve_type[0];
       dist = longest_dist_to_sprout(ca,i,j);
-      if(dist > t->evolve_threshold[1] && t->evolve_type[1] != NONE){
+      /* Both rules use the original tissue; the root rule takes precedence. */
+      if(dist > t->evolve_threshold[LONGEST_DISTANCE_TO_ROOT] &&
+         get_tissue(ca,V->species_id,t->evolve_type[LONGEST_DISTANCE_TO_ROOT]) != NULL){
 	V->tissue_id = t->evolve_type[1];
       }
     }}
+  if(stack != local)
+    free(stack);
 return;
 }
 
@@ -1115,47 +1266,51 @@ uint create_wheel(const uint* tickets, uint total_tickets){
   return wheel;
 }
 void allocate_nutrients(const uint* maxes,uint tickets[3],uint in,uint outs[3]){
-  //at the end, sum(outs) == in.
-  //first idea:
-
-  //  unsigned int entropy = rand();
+  /* Allocate up to in units, stopping when all weighted capacity is filled. */
+  uint weights[3] = {0};
   uint total_tickets = 0;
   for(int i=0;i<3;i++){
-    if(maxes[i] == 0)
-      tickets[i] = 0;
-    total_tickets += tickets[i];
+    outs[i] = 0;
+    weights[i] = maxes[i] == 0 ? 0 : tickets[i];
+    total_tickets += weights[i];
   }
-  if(total_tickets == 0)
-    return;
-  unsigned int wheel = create_wheel(tickets,total_tickets);
-  for(int i=0;i<in;i++){
-    //spin is a random value between 0 and total_tickets.
+  for(uint i=0;i<in && total_tickets != 0;i++){
     uint spin = rand() % total_tickets;
-    uint winner = (wheel >> (spin << 2)) & 0x03;
-    outs[winner]++;    
+    uint winner = 0;
+    for(uint c=0;c<3;c++){
+      if(spin < weights[c]){
+        winner = c;
+        break;
+      }
+      spin -= weights[c];
+    }
+    outs[winner]++;
     if(outs[winner] >= maxes[winner]){
-      total_tickets -= tickets[winner];
-      tickets[winner] = 0;
-      wheel = create_wheel(tickets,total_tickets);
+      total_tickets -= weights[winner];
+      weights[winner] = 0;
     }
   }
   return;
 }
 
 void redistribute_nutrients(CA*ca){
+  if(ca == NULL || ca->world == NULL || ca->new == NULL)
+    return;
   Board* new = ca->new;
   //this needs to suck less.
   for(int i=0;i<ca->ys;i++){for(int j=0;j<ca->xs;j++){
       Cell* V = &new[i][j];
-      for(uint n=PHOTO;n<=WATER;n++){
+      if(V->parent == SELF)
+        continue;
+      Tissue* t = get_tissue(ca,V->species_id,V->tissue_id);
+      if(t == NULL)
+        continue;
+      for(uint n=0;n<NC;n++){
 	uint maxes[3]    = {0};
 	uint shares[3]   = {0};
 	uint outs[3]     = {0};
 	Cell* cells[3]   = {0};
 	Neighbor neighbors[3] = {0};
-	if(V->parent == SELF)
-	  continue;
-
 	cells[0] = neighbor(ca,V->offspring[0],i,j);
 	neighbors[0] = V->offspring[0];
 
@@ -1164,31 +1319,28 @@ void redistribute_nutrients(CA*ca){
 
 	cells[2] = V->offspring[0] != V->parent ? neighbor(ca,V->parent,i,j) : V;
 	neighbors[2] = V->parent;
-	Tissue* t = get_tissue(ca,V->species_id,V->tissue_id);
-
 	if(V->nutrients[n] <= t->min[n])	  
 	  continue;
 
-	if(V->parent == NEW || V->offspring[0] == NEW || V->offspring[1] == NEW){
-	  printf("COMPUTER ALOERT!");
-	}
 	uint holes = 0;
 	for(int c=0;c<3;c++){
-	  if(cells[c] == NULL || cells[c] == V){
-	    maxes[c] = 0;
-	    shares[c] = 0;
-
-	  }else{
-	    Tissue* tissue = get_tissue(ca,cells[c]->species_id,cells[c]->tissue_id);
-	    if(tissue == NULL){
-	      	      printf("This should never happen...");
-	      continue;
-	    }
-	    maxes[c] = tissue->max[n] - cells[c]->nutrients[n] - cells[c]->escrow[n];
-	    shares[c] = get_shares_by_direction(tissue->transfer_bias[n],neighbors[c]);
-	  }
-	if(shares[c] != 0)
-	    holes += maxes[c];
+	  if(cells[c] == NULL || cells[c] == V || cells[c]->parent == SELF ||
+             cells[c]->plant_id != V->plant_id)
+            continue;
+          int duplicate = 0;
+          for(int previous=0;previous<c;previous++)
+            if(cells[c] == cells[previous])
+              duplicate = 1;
+          if(duplicate)
+            continue;
+          Tissue* tissue = get_tissue(ca,cells[c]->species_id,cells[c]->tissue_id);
+          if(tissue == NULL)
+            continue;
+          uint reserved = cells[c]->nutrients[n] + cells[c]->escrow[n];
+          maxes[c] = reserved < tissue->max[n] ? tissue->max[n] - reserved : 0;
+          shares[c] = get_shares_by_direction(tissue->transfer_bias[n],neighbors[c]);
+          if(shares[c] != 0)
+            holes += maxes[c];
 	}
 
 	uint available_nutrients = V->nutrients[n] - t->min[n];
@@ -1196,9 +1348,11 @@ void redistribute_nutrients(CA*ca){
 	allocate_nutrients(maxes,shares,allocatable_nutrients,outs);
 	uint allocd = 0;
 	for(int c=0;c<3;c++){
-	  cells[c]->flux += outs[c];
-	  cells[c]->escrow[n] += outs[c];
-	  allocd += outs[c];
+          if(outs[c] != 0){
+            cells[c]->flux += outs[c];
+            cells[c]->escrow[n] += outs[c];
+            allocd += outs[c];
+          }
 	}
 	V->nutrients[n] -= allocd;
       }
@@ -1209,23 +1363,31 @@ void redistribute_nutrients(CA*ca){
 
 
 int tick_reproduction(CA*ca){
+  if(ca == NULL || ca->world == NULL)
+    return -1;
   Board*new = ca->new;
   
   for(int i=0;i<ca->ys;i++){for(int j=0;j<ca->xs;j++){
       Cell* V = &new[i][j];
-      Species* species = &ca->world->plantae[V->species_id];
+      if(V->parent == SELF)
+        continue;
       Tissue* t = get_tissue(ca,V->species_id,V->tissue_id);
       if(t == NULL)
 	continue;
-      
-      for(int n=0;n<=WATER;n++){
-	V->nutrients[n] += V->escrow[n];
+
+      Species* species = &ca->world->plantae[V->species_id];
+      for(int n=0;n<NC;n++){
+        uint capacity = UCHAR_MAX - V->nutrients[n];
+        uint transfer = V->escrow[n] < capacity ? V->escrow[n] : capacity;
+        V->nutrients[n] += transfer;
+        V->escrow[n] -= transfer;
       }
       Tissue* offspring_t = get_tissue(ca,V->species_id,t->offspring_type);
       if(offspring_t == NULL)
 	continue;
 
-      if((t->max_offspring == 1 && (V->offspring[0] != SELF || V->offspring[1] != SELF)) || t->max_offspring == 0){
+      if(V->offspring[0] == NEW || V->offspring[1] == NEW ||
+         (t->max_offspring == 1 && (V->offspring[0] != SELF || V->offspring[1] != SELF)) || t->max_offspring == 0){
 	continue;
       }
       byte* offspring_slot	       = V->offspring[0] == SELF ? &V->offspring[0] : &V->offspring[1];
@@ -1233,8 +1395,13 @@ int tick_reproduction(CA*ca){
 	continue;
       }
       
-      //    If a unit of nutrient and photosynthate available
-      if(V->nutrients[PHOTO] < offspring_t->repro_cost[PHOTO] || V->nutrients[HUMMUS] < offspring_t->repro_cost[HUMMUS]){
+      // Admission and debit use the same offspring costs for every nutrient.
+      int affordable = 1;
+      for(int n=0;n<NC;n++){
+        if(V->nutrients[n] < offspring_t->repro_cost[n])
+          affordable = 0;
+      }
+      if(!affordable){
 	continue;
       }
       
@@ -1245,7 +1412,6 @@ int tick_reproduction(CA*ca){
       
       //choose most resource rich unoccupied cell
       Neighbor candidates[8]	= {0};
-      uint win_rng[8]           = {0};
       uint cc			=  0 ;
       uint max	        	=  0 ;
       Neighbor chosen_neighbor  =  0 ;
@@ -1259,7 +1425,8 @@ int tick_reproduction(CA*ca){
 	  continue;
 
 	C = &new[candidate_y][candidate_x];
-	if(C->parent != SELF){
+	if(C->parent != SELF || C->offspring[0] != SELF ||
+           C->offspring[1] != SELF || C->floaty){
 	  continue;
 	}
 	if(C->substrate_type != V->substrate_type){
@@ -1286,38 +1453,24 @@ int tick_reproduction(CA*ca){
 
 
       uint rng = 0;
-      uint o_bias = REPRO_BIAS(bias,candidates[0])-1;
-      win_rng[0] = o_bias;
-      rng = o_bias;
-      for(int k=1;k<cc;k++){
-	win_rng[k] = rng+REPRO_BIAS(bias,candidates[k]);
-	rng += REPRO_BIAS(bias,candidates[k]);
-      }
-      win_rng[cc] = 1000;
-
-      
-      uint result = rng == 0 ?rng:rand()%rng;
+      for(uint k=0;k<cc;k++)
+        rng += REPRO_BIAS(bias,candidates[k]);
+      uint result = rand()%rng;
       uint winner = 0;
-      for(int k=0;k<cc;k++){
-	if(result <= win_rng[k]){
+      for(uint k=0;k<cc;k++){
+        uint weight = REPRO_BIAS(bias,candidates[k]);
+	if(result < weight){
 	  winner = k;
 	  break;
 	}
+        result -= weight;
       }
-      //todo: add reproduction_bias code
 
       chosen_neighbor = candidates[winner];  
       //create new plant module
       Cell* chosen_cell = neighbor(ca,chosen_neighbor,i,j);
-      if(chosen_cell->floaty){
-	//temporary floaty fix.
-	continue;
-      }
       //set the offspring node to newly created module
       *offspring_slot = chosen_neighbor;
-      if(chosen_cell->parent != SELF || chosen_cell->offspring[0] != SELF || chosen_cell->offspring[1] != SELF || V->parent == SELF || V->offspring[0] == SELF){
-	printf("THSIO NEVER HAPPEN!IN");
-      }
 
       //set parent node of newly created module to current module
       chosen_cell->parent = RMAP[chosen_neighbor];
@@ -1329,8 +1482,8 @@ int tick_reproduction(CA*ca){
       chosen_cell->plant_id = V->plant_id;
       //      ca->population[chosen_cell->species_id][chosen_cell->plant_id][chosen_cell->tissue_id]++;
       //reduce nutrient and photosynthate.
-      V->nutrients[PHOTO] -= t->repro_cost[PHOTO];
-      V->nutrients[HUMMUS]     -= t->repro_cost[HUMMUS];
+      for(int n=0;n<NC;n++)
+        V->nutrients[n] -= offspring_t->repro_cost[n];
     }}
   return 0;
 }

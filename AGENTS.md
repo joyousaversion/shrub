@@ -15,9 +15,17 @@ Build the game with `make`. On Debian/Ubuntu the build dependencies are
 Run `TERM=xterm-256color ./shrub` in an interactive terminal. The main game loop
 has no quit key; use Ctrl-C to stop it.
 
-There is no complete automated test suite: the Makefile's `utest` target refers
-to a missing `utest.c`. For setup changes, verify the build and a short terminal
-smoke test. For simulation changes, validate the affected behavior directly.
+The game, regression suites, process-isolated test runner, and terminal smoke
+helper are written in C. Keep verification in C; no Python runner is needed.
+Run `make test`, `make test-sanitize`, and `make test-smoke`. The repaired
+suites pass 68/68 cases in both ordinary and sanitized modes. The sanitized
+historical baseline at `742229a` had 4 passing and 17 failing cases; the
+per-suite counts and evidence are recorded in `docs/VERIFICATION.md`.
+Read the implemented contracts there before changing test expectations.
+Use `.build/test_biology_sanitize <case>` to isolate a case, or a suite's
+`--list` and `--all --report <path>` options to inspect it and save results.
+The legacy `utest` target refers to a missing `utest.c`.
+The CI workflow runs the game build, both regression modes, and terminal smoke.
 
 The main executable uses `game.c` and `worldview.c` for the terminal interface;
 `shrub.c`, `genome.c`, `items.c`, `perlin.c`, and `roulette.c` implement the

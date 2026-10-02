@@ -37,3 +37,4 @@ nool_proposal.tmp
 /gmon.out
 /core
 /core.*
+/.build/

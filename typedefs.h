@@ -79,8 +79,8 @@ typedef enum TissueId{
 }TissueId;
 
 typedef enum EvolveThresholdType{
-  DIST_TO_ROOT,
-  DIST_TO_LEAF,
+  DIST_TO_ROOT = LONGEST_DISTANCE_TO_ROOT,
+  DIST_TO_LEAF = LONGEST_DISTANCE_TO_TIP,
 }EvolveThresholdType;
 typedef struct Tissue{ 
   byte                max[3];   //maximum Currency tissue can hold.

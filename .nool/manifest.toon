@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Review acceptance criteria for task 8567e629
-knot_id: 159f4363eab1c249d43453f5e6ecca6cecf4ba224a984ec0403545762e01d351
-solidified_at: 1790902700515
+intent: Verify and repair plant genetics, inheritance, growth, germination, and differentiation with C regressions and CI
+knot_id: c23024a3beecdc2bafb375024461ef0730364e2579138471cfadfc8d182c3ee6
+solidified_at: 1790903369376
 thread: plant-verification
