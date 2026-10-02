@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Create task: Make seed placement and germination preserve plant structure
-knot_id: 5b8b36e69e4d82d05fa6f4121097955b508437fe8e42be5e1a872f5eaa45623f
-solidified_at: 1790901371267
+intent: Create task: Make differentiation distances and transitions obey the contract
+knot_id: 239d3802a24733f47107d7132df46011133a13747c87a783f2dd06962ff19b66
+solidified_at: 1790901371352
 thread: plant-verification
