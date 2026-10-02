@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Review acceptance criteria for task 2b273142
-knot_id: 02419b7cb9f1f31e2bd169d4572b98f2b9c01cddcbcddcd9eb306e6a8c2caae3
-solidified_at: 1790903451355
+intent: Claim task 2b273142
+knot_id: b25dd278a2f8894a0a6c0dba2a51163d57c6b376663dd91dea966ba74ae7e34c
+solidified_at: 1790903451863
 thread: plant-verification
