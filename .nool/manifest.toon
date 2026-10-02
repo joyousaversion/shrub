@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Create task: Make differentiation distances and transitions obey the contract
-knot_id: 239d3802a24733f47107d7132df46011133a13747c87a783f2dd06962ff19b66
-solidified_at: 1790901371352
+intent: Create task: Complete lifecycle verification and enable passing test gates in CI
+knot_id: 2b27314275f2ecff35448b64d183399fb423beefe5239dfbc206d3461ef3da36
+solidified_at: 1790901371441
 thread: plant-verification
