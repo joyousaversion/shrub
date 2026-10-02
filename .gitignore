@@ -1,0 +1,39 @@
+# Nool local state
+.nool/*
+!.nool/
+!.nool/knot.bin
+!.nool/manifest.toon
+.nool/cache/
+.nool/tmp/
+.nool/try/
+.nool/target/
+.nool/memory/
+.nool/git_mirror/
+.nool/daemon.sock
+.nool/sync.log
+.nool/test_sync.log
+.nool/nool.db
+.nool/nool.db-shm
+.nool/nool.db-wal
+.nool/nool.db-journal
+.nool/knots/
+.nool/.DS_Store
+.nool/adr/
+.nool/SIE_JUSTIFICATION
+.nool/enhancement-context.yaml
+nool_proposal.tmp
+
+# Local agent settings contain absolute paths to this checkout.
+.claude/
+
+# Build outputs and profiling data
+/shrub
+/serialize
+/menu
+/bg
+/utest
+/TAGS
+*.o
+/gmon.out
+/core
+/core.*

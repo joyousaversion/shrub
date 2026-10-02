@@ -41,5 +41,27 @@ Installation guide:
  1. observe common params in game.c
  2. make
  3. ./shrub
- 
 
+### Development with Nool
+
+This project is set up for the Nool CLI. On Debian/Ubuntu, install the build
+dependencies with `sudo apt-get install build-essential libncurses-dev emacs-bin-common`.
+
+```sh
+nool init
+nool status --json
+nool context "plant growth and the simulation loop" --budget 2000 --cite
+make
+TERM=xterm-256color ./shrub
+```
+
+Use Ctrl-C to stop the game. Save changes through Nool:
+
+```sh
+nool propose --all --intent "Describe the change" --test-note "Describe validation"
+nool solidify --candidate <id-from-propose> --full
+nool doctor
+```
+
+`nool architecture review` lists recovered architecture candidates for review.
+See [AGENTS.md](AGENTS.md) for the source layout and agent workflow.
