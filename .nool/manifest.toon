@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Submit task 68b283d5 for QA
-knot_id: 0a8c808ba0537c4a77f31d5f9b6e11641eb299aa5f24c41451856426c48af1fa
-solidified_at: 1790903413140
+intent: Verify done task 68b283d5 (receipt 2befbe88)
+knot_id: 63afb252e4ee8595561b2a86a77c7dc14c3f15d0ac5df8c277d427834ce30adf
+solidified_at: 1790903413308
 thread: plant-verification
