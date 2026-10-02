@@ -1,7 +1,7 @@
 commit_policy_hash: 2e8b563ff1a0f6d478257fc6a82b13ac853a3787b40d0cc00df2893e7522a5c1
 commit_policy_version: 1
 commit_template_hash: 686bd6f6d3f60a9716f8ca85195b61c4852e2e6d8a91cf7a01fc867d6252a9af
-intent: Verify done task 8567e629 (receipt 9003a88c)
-knot_id: 0e54821155fafa3b4a0c649f3422f2601ed18ec8aa147f232bb7eaea2080ead1
-solidified_at: 1790903411534
+intent: Review acceptance criteria for task bd7b055e
+knot_id: 5616058dc53819f165155281527b3165f0ba8c4e754574096e1963b8d57fd76d
+solidified_at: 1790903411698
 thread: plant-verification
